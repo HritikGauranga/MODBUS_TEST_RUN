@@ -43,7 +43,6 @@ void loop() {
     Serial.println(ModbusRTUClient.lastError());
   }
 
-  // wait for 0.5 second
   delay(500);
 
   // for (slave) id 1: write the value of 0x00, to the coil at address 0x00 

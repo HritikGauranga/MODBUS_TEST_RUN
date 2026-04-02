@@ -55,8 +55,8 @@ void setup() {
   }
 
   // Configure Modbus
-  modbusTCPServer.configureHoldingRegisters(0, 1);
-  modbusTCPServer.configureCoils(0, 1);
+  modbusTCPServer.configureHoldingRegisters(0, 2);
+  modbusTCPServer.configureCoils(0, 2);
 
   Serial.println("Ready...");
 }
@@ -114,11 +114,13 @@ void loop() {
   int voltage = 220 + (millis() % 10);
   int counter = millis() / 1000;
 
+  modbusTCPServer.configureInputRegisters(0, 3);
+
   modbusTCPServer.inputRegisterWrite(0, actualTemp);
   modbusTCPServer.inputRegisterWrite(1, voltage);
   modbusTCPServer.inputRegisterWrite(2, counter);
 
-  delay(100);
+  delay(10);
 }
 
     Serial.println("Client disconnected");
