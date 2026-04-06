@@ -4,8 +4,8 @@
 ModbusRTU mb;
 
 // UART pins
-#define RXD2 16
-#define TXD2 17
+#define RXD2 9 //SD2
+#define TXD2 10 //SD3
 
 // LED
 #define LED_PIN 2

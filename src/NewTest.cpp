@@ -1,8 +1,3 @@
-//Hritik Nagpure
-// TCPRTU.cpp - Modbus TCP + RTU bridge on ESP32+W5500+FT232
-// This code demonstrates how to create a Modbus bridge that connects a Modbus RTU slave (over UART) to a Modbus TCP server (over Ethernet).
-// The ESP32 acts as both a Modbus RTU slave and a Modbus TCP server, allowing clients on the network to read/write data that is also accessible via the RTU interface.
-
 #include <Arduino.h>
 #include <SPI.h>
 #include <Ethernet.h>
@@ -23,7 +18,7 @@ IPAddress ip(192, 168, 8, 177);
 EthernetServer ethServer(502);
 ModbusTCPServer modbusTCPServer;
 EthernetClient activeClient;
-bool clientActive = false;   // FIX: explicit flag instead of relying on object validity
+bool clientActive = false;
 
 // ================== HARDWARE ==================
 #define LED_PIN  2
@@ -75,26 +70,33 @@ void syncFromRTU() {
   uint16_t newSpeed = mbRTU.Hreg(1);
 
   if (newLed != prevCoilLed_RTU) {
-    coilLed = newLed;
-    prevCoilLed_RTU = newLed;
+    coilLed          = newLed;
+    prevCoilLed_RTU  = newLed;
+    prevCoilLed_TCP  = newLed;  // FIX: keep TCP baseline in sync
     srcLed = SRC_RTU;
     Serial.printf("[RTU] LED -> %s\n", coilLed ? "ON" : "OFF");
   }
+
   if (newPump != prevCoilPump_RTU) {
-    coilPump = newPump;
+    coilPump         = newPump;
     prevCoilPump_RTU = newPump;
+    prevCoilPump_TCP = newPump;  // FIX: keep TCP baseline in sync
     srcPump = SRC_RTU;
     Serial.printf("[RTU] Pump -> %s\n", coilPump ? "ON" : "OFF");
   }
+
   if (newTemp != prevSetTemp_RTU) {
-    setTemp = newTemp;
+    setTemp         = newTemp;
     prevSetTemp_RTU = newTemp;
+    prevSetTemp_TCP = newTemp;  // FIX: keep TCP baseline in sync
     srcTemp = SRC_RTU;
     Serial.printf("[RTU] SetTemp -> %d\n", setTemp);
   }
+
   if (newSpeed != prevSetSpeed_RTU) {
-    setSpeed = newSpeed;
+    setSpeed         = newSpeed;
     prevSetSpeed_RTU = newSpeed;
+    prevSetSpeed_TCP = newSpeed;  // FIX: keep TCP baseline in sync
     srcSpeed = SRC_RTU;
     Serial.printf("[RTU] SetSpeed -> %d\n", setSpeed);
   }
@@ -118,26 +120,33 @@ void syncFromTCP() {
   uint16_t newSpeed = modbusTCPServer.holdingRegisterRead(1);
 
   if (newLed != prevCoilLed_TCP) {
-    coilLed = newLed;
-    prevCoilLed_TCP = newLed;
+    coilLed          = newLed;
+    prevCoilLed_TCP  = newLed;
+    prevCoilLed_RTU  = newLed;  // FIX: keep RTU baseline in sync
     srcLed = SRC_TCP;
     Serial.printf("[TCP] LED -> %s\n", coilLed ? "ON" : "OFF");
   }
+
   if (newPump != prevCoilPump_TCP) {
-    coilPump = newPump;
+    coilPump         = newPump;
     prevCoilPump_TCP = newPump;
+    prevCoilPump_RTU = newPump;  // FIX: keep RTU baseline in sync
     srcPump = SRC_TCP;
     Serial.printf("[TCP] Pump -> %s\n", coilPump ? "ON" : "OFF");
   }
+
   if (newTemp != prevSetTemp_TCP) {
-    setTemp = newTemp;
+    setTemp         = newTemp;
     prevSetTemp_TCP = newTemp;
+    prevSetTemp_RTU = newTemp;  // FIX: keep RTU baseline in sync
     srcTemp = SRC_TCP;
     Serial.printf("[TCP] SetTemp -> %d\n", setTemp);
   }
+
   if (newSpeed != prevSetSpeed_TCP) {
-    setSpeed = newSpeed;
+    setSpeed         = newSpeed;
     prevSetSpeed_TCP = newSpeed;
+    prevSetSpeed_RTU = newSpeed;  // FIX: keep RTU baseline in sync
     srcSpeed = SRC_TCP;
     Serial.printf("[TCP] SetSpeed -> %d\n", setSpeed);
   }
@@ -162,23 +171,15 @@ void updateSimulatedMetrics() {
 
 // ================== NETWORK HANDLER ==================
 void processNetwork() {
-
   if (clientActive) {
-    // FIX: Only check for disconnect on the client we already accepted.
-    // Do NOT call ethServer.available() here — that's what was causing
-    // the false "second client" detections on the same connection.
     if (!activeClient.connected()) {
       activeClient.stop();
       clientActive = false;
       Serial.println("[TCP] Client disconnected");
     } else {
-      // Normal poll for existing client
       modbusTCPServer.poll();
     }
   } else {
-    // FIX: Only look for new clients when we have none.
-    // This prevents ethServer.available() from returning the same
-    // connection repeatedly and triggering the reject path.
     EthernetClient newClient = ethServer.available();
     if (newClient) {
       activeClient = newClient;
@@ -238,8 +239,6 @@ void setup() {
 
 // ================== LOOP ==================
 void loop() {
-
-  // RTU task must run every iteration — no delays before this
   mbRTU.task();
 
   unsigned long now = millis();
@@ -257,5 +256,3 @@ void loop() {
   syncToRTU();
   syncToTCP();
 }
-
-//To read/write holding register address

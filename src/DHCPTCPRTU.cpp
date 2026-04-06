@@ -13,17 +13,17 @@
 ModbusRTU mbRTU;
 // #define RXD2 16
 // #define TXD2 17
-#define RXD2 9 //SD2
+#define RXD2 9  //SD2
 #define TXD2 10 //SD3
 
 // ================== TCP SETUP ==================
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xEE};
-IPAddress ip(192, 168, 8, 177);
+// IPAddress ip(192, 168, 8, 177);  // removed — DHCP assigns IP automatically
 
 EthernetServer ethServer(502);
 ModbusTCPServer modbusTCPServer;
 EthernetClient activeClient;
-bool clientActive = false;   // FIX: explicit flag instead of relying on object validity
+bool clientActive = false;
 
 // ================== HARDWARE ==================
 #define LED_PIN  2
@@ -38,10 +38,10 @@ DataSource srcTemp  = SRC_NONE;
 DataSource srcSpeed = SRC_NONE;
 
 // ================== SHARED DATA ==================
-bool     coilLed   = false;
-bool     coilPump  = false;
-uint16_t setTemp   = 20;
-uint16_t setSpeed  = 100;
+bool     coilLed     = false;
+bool     coilPump    = false;
+uint16_t setTemp     = 20;
+uint16_t setSpeed    = 100;
 uint16_t actualTemp  = 0;
 uint16_t voltage     = 230;
 uint16_t counterVal  = 0;
@@ -58,8 +58,10 @@ uint16_t prevSetTemp_TCP   = 20;
 uint16_t prevSetSpeed_TCP  = 100;
 
 // ================== TIMING ==================
-#define LOOP_INTERVAL_MS 10
-unsigned long lastLoopTime = 0;
+#define LOOP_INTERVAL_MS  10
+#define DHCP_RENEW_MS     60000  // check DHCP lease every 60 seconds
+unsigned long lastLoopTime  = 0;
+unsigned long lastDHCPCheck = 0;
 
 // ================== HARDWARE APPLY ==================
 void applyHardware() {
@@ -160,25 +162,35 @@ void updateSimulatedMetrics() {
   voltage    = 220 + (millis() % 10);
 }
 
+// ================== DHCP MAINTAIN ==================
+void maintainDHCP() {
+  unsigned long now = millis();
+  if (now - lastDHCPCheck < DHCP_RENEW_MS) return;
+  lastDHCPCheck = now;
+
+  int result = Ethernet.maintain();
+  switch (result) {
+    case 0: break;  // lease still valid, nothing to do
+    case 1: Serial.println("[DHCP] Renew failed");  break;
+    case 2: Serial.print("[DHCP] Renewed — IP: ");
+            Serial.println(Ethernet.localIP());      break;
+    case 3: Serial.println("[DHCP] Rebind failed"); break;
+    case 4: Serial.print("[DHCP] Rebound — IP: ");
+            Serial.println(Ethernet.localIP());      break;
+  }
+}
+
 // ================== NETWORK HANDLER ==================
 void processNetwork() {
-
   if (clientActive) {
-    // FIX: Only check for disconnect on the client we already accepted.
-    // Do NOT call ethServer.available() here — that's what was causing
-    // the false "second client" detections on the same connection.
     if (!activeClient.connected()) {
       activeClient.stop();
       clientActive = false;
       Serial.println("[TCP] Client disconnected");
     } else {
-      // Normal poll for existing client
       modbusTCPServer.poll();
     }
   } else {
-    // FIX: Only look for new clients when we have none.
-    // This prevents ethServer.available() from returning the same
-    // connection repeatedly and triggering the reject path.
     EthernetClient newClient = ethServer.available();
     if (newClient) {
       activeClient = newClient;
@@ -211,16 +223,22 @@ void setup() {
   mbRTU.addIreg(1, voltage);
   mbRTU.addIreg(2, counterVal);
 
-  // ---------- TCP ----------
+  // ---------- TCP + DHCP ----------
   SPI.begin(18, 19, 23, 5);
   Ethernet.init(5);
-  Ethernet.begin(mac, ip);
+
+  Serial.println("Requesting DHCP...");
+  if (Ethernet.begin(mac) == 0) {
+    Serial.println("[DHCP] Failed — check router/cable");
+    while (1);
+  }
+
   delay(1000);
 
-  Serial.print("IP: ");
-  Serial.println(Ethernet.localIP());
-  Serial.print("Link: ");
-  Serial.println(Ethernet.linkStatus());
+  Serial.print("IP:      "); Serial.println(Ethernet.localIP());
+  Serial.print("Gateway: "); Serial.println(Ethernet.gatewayIP());
+  Serial.print("Subnet:  "); Serial.println(Ethernet.subnetMask());
+  Serial.print("Link:    "); Serial.println(Ethernet.linkStatus());
 
   ethServer.begin();
 
@@ -233,7 +251,7 @@ void setup() {
   modbusTCPServer.configureHoldingRegisters(0, 2);
   modbusTCPServer.configureInputRegisters(0, 3);
 
-  Serial.println("TCP + RTU Bridge Ready");
+  Serial.println("TCP + RTU Bridge Ready (DHCP)");
 }
 
 // ================== LOOP ==================
@@ -246,6 +264,7 @@ void loop() {
   if (now - lastLoopTime < LOOP_INTERVAL_MS) return;
   lastLoopTime = now;
 
+  maintainDHCP();
   processNetwork();
 
   syncFromRTU();
@@ -257,5 +276,3 @@ void loop() {
   syncToRTU();
   syncToTCP();
 }
-
-//To read/write holding register address
