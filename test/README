@@ -9,8 +9,8 @@ in the development cycle.
 
 More information about PlatformIO Unit Testing:
 - https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
-W5500	ESP32
-W5500  -->	ESP32
+W5500 Interface to ESP32
+
 VCC	   -->  3.3V
 GND	   -->  GND
 SCK	   -->  GPIO18
