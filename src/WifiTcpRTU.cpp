@@ -16,10 +16,10 @@ ModbusRTU mbRTU;
 
 // ================== ETHERNET TCP SETUP ==================
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xEE};
-EthernetServer ethServer(502);
+EthernetServer ethServer(502); //ethServer(502) - existing Ethernet server 
 ModbusTCPServer modbusTCPServer;   // existing Ethernet Modbus server
-EthernetClient activeClient;
-bool clientActive = false;
+EthernetClient activeClient; //
+bool clientActive = false; //false because we start with no client connected
 
 // ================== WIFI TCP SETUP ==================
 const char* ssid     = "Airtel4G";
@@ -91,9 +91,9 @@ void applyHardware() {
 
 // ================== SIMULATION ==================
 void updateSimulatedMetrics() {
-  counterVal = millis() / 1000;
-  actualTemp = setTemp + (millis() % 5);
-  voltage    = 220 + (millis() % 10);
+  counterVal = millis() / 1000; // simple uptime counter in seconds
+  actualTemp = setTemp + (millis() % 5); // actual temp fluctuates slightly around setTemp
+  voltage    = 220 + (millis() % 10); // voltage fluctuates slightly around 220V
 }
 
 // ================== RTU SYNC ==================
@@ -104,15 +104,15 @@ void syncFromRTU() {
   uint16_t newTemp  = mbRTU.Hreg(0);
   uint16_t newSpeed = mbRTU.Hreg(1);
 
-  if (newLed != prevCoilLed_RTU) {
+  if (newLed != prevCoilLed_RTU) { //
     coilLed            = newLed;
     prevCoilLed_RTU    = newLed;
     prevCoilLed_TCP    = newLed;  // sync all baselines
     prevCoilLed_WIFI   = newLed;
-    srcLed = SRC_RTU;
+    srcLed = SRC_RTU; //srcLed = SRC_RTU because the change came from RTU, this will help us identify the source of truth for this data point and prevent loops
     // Immediately update other servers to prevent false change detection
     modbusTCPServer.coilWrite(0, coilLed);
-    wifiModbus.coilWrite(0, coilLed);
+    wifiModbus.coilWrite(0, coilLed); //Here if we change the value on RTU coil 0, if On it will store at coilLed variable and then it will update the coil 0 of TCP and WiFi server with the new value, this way we keep all servers in sync and prevent loops because when TCP and WiFi servers get updated, they will see that the value is same as previous and won't trigger another update back to RTU
     Serial.printf("[RTU] LED -> %s\n", coilLed ? "ON" : "OFF");
   }
   if (newPump != prevCoilPump_RTU) {
@@ -240,6 +240,7 @@ void syncFromTCP() {
 void syncToTCP() {
   modbusTCPServer.coilWrite(0, coilLed);
   modbusTCPServer.coilWrite(1, coilPump);
+  modbusTCPServer.coilWrite(2, coilLed2);
   modbusTCPServer.holdingRegisterWrite(0, setTemp);
   modbusTCPServer.holdingRegisterWrite(1, setSpeed);
   modbusTCPServer.inputRegisterWrite(0, actualTemp);
@@ -326,10 +327,10 @@ void syncToWiFi() {
 // ================== DHCP MAINTAIN ==================
 void maintainDHCP() {
   unsigned long now = millis();
-  if (now - lastDHCPCheck < DHCP_RENEW_MS) return;
+  if (now - lastDHCPCheck < DHCP_RENEW_MS) return; //this 
   lastDHCPCheck = now;
 
-  int result = Ethernet.maintain();
+  int result = Ethernet.maintain(); //
   switch (result) {
     case 0: break;
     case 1: Serial.println("[DHCP] Renew failed");  break;
