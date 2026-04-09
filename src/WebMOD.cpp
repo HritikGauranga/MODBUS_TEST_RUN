@@ -30,17 +30,20 @@ bool clientActive = false;
 // ================== HARDWARE ==================
 #define LED_PIN  2
 #define PUMP_PIN 15
+#define LED_PIN2 16
 
 // ================== SOURCE TRACKING ==================
 typedef enum { SRC_NONE, SRC_RTU, SRC_TCP } DataSource;
 DataSource srcLed   = SRC_NONE;
 DataSource srcPump  = SRC_NONE;
+DataSource srcLed2  = SRC_NONE;
 DataSource srcTemp  = SRC_NONE;
 DataSource srcSpeed = SRC_NONE;
 
 // ================== SHARED DATA ==================
 bool     coilLed     = false;
 bool     coilPump    = false;
+bool     coilLed2    = false;
 uint16_t setTemp     = 20;
 uint16_t setSpeed    = 100;
 uint16_t actualTemp  = 0;
@@ -50,11 +53,14 @@ uint16_t counterVal  = 0;
 // ================== PREVIOUS VALUES ==================
 bool     prevCoilLed_RTU   = false;
 bool     prevCoilPump_RTU  = false;
+bool     prevCoilLed2_RTU  = false;
 uint16_t prevSetTemp_RTU   = 20;
 uint16_t prevSetSpeed_RTU  = 100;
 
 bool     prevCoilLed_TCP   = false;
 bool     prevCoilPump_TCP  = false;
+bool     prevCoilLed2_TCP  = false;
+
 uint16_t prevSetTemp_TCP   = 20;
 uint16_t prevSetSpeed_TCP  = 100;
 
@@ -71,12 +77,14 @@ String htmlPage();
 void applyHardware() {
   digitalWrite(LED_PIN,  coilLed  ? HIGH : LOW);
   digitalWrite(PUMP_PIN, coilPump ? HIGH : LOW);
+  digitalWrite(LED_PIN2, coilLed2 ? HIGH : LOW);
 }
 
 // RTU Sync Functions
 void syncFromRTU() {
   bool     newLed   = mbRTU.Coil(0);
   bool     newPump  = mbRTU.Coil(1);
+  bool     newLed2  = mbRTU.Coil(2);
   uint16_t newTemp  = mbRTU.Hreg(0);
   uint16_t newSpeed = mbRTU.Hreg(1);
 
@@ -91,6 +99,12 @@ void syncFromRTU() {
     prevCoilPump_RTU = newPump;
     srcPump = SRC_RTU;
     Serial.printf("[RTU] Pump -> %s\n", coilPump ? "ON" : "OFF");
+  }
+  if (newLed2 != prevCoilLed2_RTU) {
+    coilLed2 = newLed2;
+    prevCoilLed2_RTU = newLed2;
+    srcLed2 = SRC_RTU;
+    Serial.printf("[RTU] LED2 -> %s\n", coilLed2 ? "ON" : "OFF");
   }
   if (newTemp != prevSetTemp_RTU) {
     setTemp = newTemp;
@@ -109,6 +123,7 @@ void syncFromRTU() {
 void syncToRTU() {
   mbRTU.Coil(0, coilLed);
   mbRTU.Coil(1, coilPump);
+  mbRTU.Coil(2, coilLed2);
   mbRTU.Hreg(0, setTemp);
   mbRTU.Hreg(1, setSpeed);
   mbRTU.Ireg(0, actualTemp);
@@ -120,6 +135,7 @@ void syncToRTU() {
 void syncFromTCP() {
   bool     newLed   = modbusTCPServer.coilRead(0);
   bool     newPump  = modbusTCPServer.coilRead(1);
+  bool     newLed2  = modbusTCPServer.coilRead(2);
   uint16_t newTemp  = modbusTCPServer.holdingRegisterRead(0);
   uint16_t newSpeed = modbusTCPServer.holdingRegisterRead(1);
 
@@ -134,6 +150,12 @@ void syncFromTCP() {
     prevCoilPump_TCP = newPump;
     srcPump = SRC_TCP;
     Serial.printf("[TCP] Pump -> %s\n", coilPump ? "ON" : "OFF");
+  }
+  if (newLed2 != prevCoilLed2_TCP) {
+    coilLed2 = newLed2;
+    prevCoilLed2_TCP = newLed2;
+    srcLed2 = SRC_TCP;
+    Serial.printf("[TCP] LED2 -> %s\n", coilLed2 ? "ON" : "OFF");
   }
   if (newTemp != prevSetTemp_TCP) {
     setTemp = newTemp;
@@ -152,6 +174,7 @@ void syncFromTCP() {
 void syncToTCP() {
   modbusTCPServer.coilWrite(0, coilLed);
   modbusTCPServer.coilWrite(1, coilPump);
+  modbusTCPServer.coilWrite(2, coilLed2);
   modbusTCPServer.holdingRegisterWrite(0, setTemp);
   modbusTCPServer.holdingRegisterWrite(1, setSpeed);
   modbusTCPServer.inputRegisterWrite(0, actualTemp);
@@ -345,6 +368,7 @@ void setup() {
   
   pinMode(LED_PIN,  OUTPUT);
   pinMode(PUMP_PIN, OUTPUT);
+  pinMode(LED_PIN2, OUTPUT);
   digitalWrite(LED_PIN,  LOW);
   digitalWrite(PUMP_PIN, LOW);
 
@@ -354,6 +378,7 @@ void setup() {
 
   mbRTU.addCoil(0, coilLed);
   mbRTU.addCoil(1, coilPump);
+  mbRTU.addCoil(2, coilLed2);
   mbRTU.addHreg(0, setTemp);
   mbRTU.addHreg(1, setSpeed);
   mbRTU.addIreg(0, actualTemp);
@@ -387,7 +412,7 @@ void setup() {
     Serial.println("[TCP] Server init failed!");
   }
 
-  modbusTCPServer.configureCoils(0, 2);
+  modbusTCPServer.configureCoils(0, 3);
   modbusTCPServer.configureHoldingRegisters(0, 2);
   modbusTCPServer.configureInputRegisters(0, 3);
 
