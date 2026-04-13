@@ -1,249 +1,48 @@
-// Hritik Nagpure
-// WebMOD + DHCP TCP/RTU Bridge - ESP32 File Manager with Modbus TCP/RTU
-// Combines Web File Manager (AP Mode) + DHCP Ethernet + Modbus TCP/RTU Bridge
+// File Management and Web Server for ESP32
+// Extracted from WebMOD - ESP32 File Manager with web interface
 
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
 #include <WiFi.h>
-#include <SPI.h>
-#include <Ethernet.h>
-#include <ArduinoModbus.h>
-#include <ModbusRTU.h>
 
 // ================== ACCESS POINT (WEB SERVER) ==================
 const char* ap_ssid = "ESP32_FileServer";
 const char* ap_password = "12345678";
 
-// ================== RTU SETUP ==================
-ModbusRTU mbRTU;
-#define RXD2 9  // SD2
-#define TXD2 10 // SD3
-
-// ================== TCP SETUP (ETHERNET) ==================
-byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xEE};
-EthernetServer ethServer(502);
-ModbusTCPServer modbusTCPServer;
-EthernetClient activeClient;
-bool clientActive = false;
-
-// ================== HARDWARE ==================
-#define LED_PIN  2
-#define PUMP_PIN 15
-#define LED_PIN2 16
-#define BUTTON_PIN 33  // dont use GPIOs 1,3 (serial) or 6-11 (SPI flash) for the button, usable pins: 0,4,5,12-15,25-27,32-39
-//connect pin of button t
-
-// ================== SOURCE TRACKING ==================
-typedef enum { SRC_NONE, SRC_RTU, SRC_TCP } DataSource;
-DataSource srcLed   = SRC_NONE;
-DataSource srcPump  = SRC_NONE;
-DataSource srcLed2  = SRC_NONE;
-DataSource srcTemp  = SRC_NONE;
-DataSource srcSpeed = SRC_NONE;
-
-// ================== SHARED DATA ==================
-bool     coilLed     = false;
-bool     coilPump    = false;
-bool     coilLed2    = false;
-uint16_t setTemp     = 20;
-uint16_t setSpeed    = 100;
-uint16_t actualTemp  = 0;
-uint16_t voltage     = 230;
-uint16_t counterVal  = 0;
-
-// ================== PREVIOUS VALUES ==================
-bool     prevCoilLed_RTU   = false;
-bool     prevCoilPump_RTU  = false;
-bool     prevCoilLed2_RTU  = false;
-uint16_t prevSetTemp_RTU   = 20;
-uint16_t prevSetSpeed_RTU  = 100;
-
-bool     prevCoilLed_TCP   = false;
-bool     prevCoilPump_TCP  = false;
-bool     prevCoilLed2_TCP  = false;
-
-uint16_t prevSetTemp_TCP   = 20;
-uint16_t prevSetSpeed_TCP  = 100;
-
-// ================== TIMING ==================
-#define LOOP_INTERVAL_MS  10
-#define DHCP_RENEW_MS     60000
-#define BUTTON_DEBOUNCE_MS 100
-unsigned long lastLoopTime  = 0;
-unsigned long lastDHCPCheck = 0;
-unsigned long lastButtonChange = 0;
-bool apModeActive = false;
-bool serverRoutesSetup = false;  // Track if web routes are configured
-bool lastButtonState = HIGH;  // Latching switch initial state
-
-String htmlPage();
-
-// ================== FUNCTIONS ==================
-// Hardware Apply
-void applyHardware() {
-  digitalWrite(LED_PIN,  coilLed  ? HIGH : LOW);
-  digitalWrite(PUMP_PIN, coilPump ? HIGH : LOW);
-  digitalWrite(LED_PIN2, coilLed2 ? HIGH : LOW);
-}
-
-// RTU Sync Functions
-void syncFromRTU() {
-  bool     newLed   = mbRTU.Coil(0);
-  bool     newPump  = mbRTU.Coil(1);
-  bool     newLed2  = mbRTU.Coil(2);
-  uint16_t newTemp  = mbRTU.Hreg(0);
-  uint16_t newSpeed = mbRTU.Hreg(1);
-
-  if (newLed != prevCoilLed_RTU) {
-    coilLed = newLed;
-    prevCoilLed_RTU = newLed;
-    srcLed = SRC_RTU;
-    Serial.printf("[RTU] LED -> %s\n", coilLed ? "ON" : "OFF");
-  }
-  if (newPump != prevCoilPump_RTU) {
-    coilPump = newPump;
-    prevCoilPump_RTU = newPump;
-    srcPump = SRC_RTU;
-    Serial.printf("[RTU] Pump -> %s\n", coilPump ? "ON" : "OFF");
-  }
-  if (newLed2 != prevCoilLed2_RTU) {
-    coilLed2 = newLed2;
-    prevCoilLed2_RTU = newLed2;
-    srcLed2 = SRC_RTU;
-    Serial.printf("[RTU] LED2 -> %s\n", coilLed2 ? "ON" : "OFF");
-  }
-  if (newTemp != prevSetTemp_RTU) {
-    setTemp = newTemp;
-    prevSetTemp_RTU = newTemp;
-    srcTemp = SRC_RTU;
-    Serial.printf("[RTU] SetTemp -> %d\n", setTemp);
-  }
-  if (newSpeed != prevSetSpeed_RTU) {
-    setSpeed = newSpeed;
-    prevSetSpeed_RTU = newSpeed;
-    srcSpeed = SRC_RTU;
-    Serial.printf("[RTU] SetSpeed -> %d\n", setSpeed);
-  }
-}
-
-void syncToRTU() {
-  mbRTU.Coil(0, coilLed);
-  mbRTU.Coil(1, coilPump);
-  mbRTU.Coil(2, coilLed2);
-  mbRTU.Hreg(0, setTemp);
-  mbRTU.Hreg(1, setSpeed);
-  mbRTU.Ireg(0, actualTemp);
-  mbRTU.Ireg(1, voltage);
-  mbRTU.Ireg(2, counterVal);
-}
-
-// TCP Sync Functions
-void syncFromTCP() {
-  bool     newLed   = modbusTCPServer.coilRead(0);
-  bool     newPump  = modbusTCPServer.coilRead(1);
-  bool     newLed2  = modbusTCPServer.coilRead(2);
-  uint16_t newTemp  = modbusTCPServer.holdingRegisterRead(0);
-  uint16_t newSpeed = modbusTCPServer.holdingRegisterRead(1);
-
-  if (newLed != prevCoilLed_TCP) {
-    coilLed = newLed;
-    prevCoilLed_TCP = newLed;
-    srcLed = SRC_TCP;
-    Serial.printf("[TCP] LED -> %s\n", coilLed ? "ON" : "OFF");
-  }
-  if (newPump != prevCoilPump_TCP) {
-    coilPump = newPump;
-    prevCoilPump_TCP = newPump;
-    srcPump = SRC_TCP;
-    Serial.printf("[TCP] Pump -> %s\n", coilPump ? "ON" : "OFF");
-  }
-  if (newLed2 != prevCoilLed2_TCP) {
-    coilLed2 = newLed2;
-    prevCoilLed2_TCP = newLed2;
-    srcLed2 = SRC_TCP;
-    Serial.printf("[TCP] LED2 -> %s\n", coilLed2 ? "ON" : "OFF");
-  }
-  if (newTemp != prevSetTemp_TCP) {
-    setTemp = newTemp;
-    prevSetTemp_TCP = newTemp;
-    srcTemp = SRC_TCP;
-    Serial.printf("[TCP] SetTemp -> %d\n", setTemp);
-  }
-  if (newSpeed != prevSetSpeed_TCP) {
-    setSpeed = newSpeed;
-    prevSetSpeed_TCP = newSpeed;
-    srcSpeed = SRC_TCP;
-    Serial.printf("[TCP] SetSpeed -> %d\n", setSpeed);
-  }
-}
-
-void syncToTCP() {
-  modbusTCPServer.coilWrite(0, coilLed);
-  modbusTCPServer.coilWrite(1, coilPump);
-  modbusTCPServer.coilWrite(2, coilLed2);
-  modbusTCPServer.holdingRegisterWrite(0, setTemp);
-  modbusTCPServer.holdingRegisterWrite(1, setSpeed);
-  modbusTCPServer.inputRegisterWrite(0, actualTemp);
-  modbusTCPServer.inputRegisterWrite(1, voltage);
-  modbusTCPServer.inputRegisterWrite(2, counterVal);
-}
-
-// Update Simulated Metrics
-void updateSimulatedMetrics() {
-  counterVal = millis() / 1000;
-  actualTemp = setTemp + (millis() % 5);
-  voltage    = 220 + (millis() % 10);
-}
-
-// DHCP Maintenance
-void maintainDHCP() {
-  unsigned long now = millis();
-  if (now - lastDHCPCheck < DHCP_RENEW_MS) return;
-  lastDHCPCheck = now;
-
-  int result = Ethernet.maintain();
-  switch (result) {
-    case 0: break;
-    case 1: Serial.println("[DHCP] Renew failed");  break;
-    case 2: Serial.print("[DHCP] Renewed — IP: ");
-            Serial.println(Ethernet.localIP());      break;
-    case 3: Serial.println("[DHCP] Rebind failed"); break;
-    case 4: Serial.print("[DHCP] Rebound — IP: ");
-            Serial.println(Ethernet.localIP());      break;
-  }
-}
-
-// Network Handler
-void processNetwork() {
-  if (clientActive) {
-    if (!activeClient.connected()) {
-      activeClient.stop();
-      clientActive = false;
-      Serial.println("[TCP] Client disconnected");
-    } else {
-      modbusTCPServer.poll();
-    }
-  } else {
-    EthernetClient newClient = ethServer.available();
-    if (newClient) {
-      activeClient = newClient;
-      modbusTCPServer.accept(activeClient);
-      clientActive = true;
-      Serial.println("[TCP] Client connected");
-    }
-  }
-}
-
-// Async server
+// ================== WEB SERVER ==================
 AsyncWebServer server(80);
 
 // ================== FILE ==================
 static File uploadFile;
 
-// ================== WEB SERVER ROUTE SETUP ==================
-void setupWebServerRoutes() {
-  if (serverRoutesSetup) return;  // Already set up
+// Forward declarations
+String htmlPage();
+
+// ================== SETUP ==================
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println("\n=== ESP32 File Manager (AP Mode) ===");
+
+  // START ACCESS POINT
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ap_ssid, ap_password);
+
+  Serial.println("Access Point Started!");
+  Serial.print("SSID: ");
+  Serial.println(ap_ssid);
+  Serial.print("IP: ");
+  Serial.println(WiFi.softAPIP());
+
+  //  LittleFS
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS Mount Failed!");
+    return;
+  }
+
+  // ================== ROUTES ==================
 
   //  Dashboard
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -342,184 +141,16 @@ void setupWebServerRoutes() {
     }
   });
 
-  serverRoutesSetup = true;
-  Serial.println("[WebServer] Routes configured");
-}
-
-// ================== AP MODE CONTROL ==================
-void startAPMode() {
-  if (apModeActive) return;  // Already running
-  
-  Serial.println("\n=== Starting AP Mode ===");
-  
-  // Initialize WiFi AP
-  WiFi.mode(WIFI_AP);
-  delay(10);  // Allow WiFi stack to initialize
-  WiFi.softAP(ap_ssid, ap_password);
-  delay(100);  // Wait for AP to fully start
-  
-  Serial.println("Access Point Started!");
-  Serial.print("SSID: ");
-  Serial.println(ap_ssid);
-  Serial.print("IP: ");
-  Serial.println(WiFi.softAPIP());
-  
-  // Set up and start web server routes
-  setupWebServerRoutes();
   server.begin();
-  Serial.println("WebUI available at: http://192.168.4.1");
-  
-  apModeActive = true;
-}
 
-void stopAPMode() {
-  if (!apModeActive) return;  // Already stopped
-  
-  Serial.println("\n=== Stopping AP Mode ===");
-  WiFi.softAPdisconnect(true);  // true = turn off AP
-  WiFi.mode(WIFI_OFF);
-  
-  apModeActive = false;
-  Serial.println("AP Mode disabled (switch to ON position to enable)");
-}
-
-void checkButtonPress() {
-  bool buttonState = digitalRead(BUTTON_PIN);
-  unsigned long now = millis();
-  
-  // Detect state CHANGE with debouncing (latching switch has two stable states)
-  if (buttonState != lastButtonState && (now - lastButtonChange > BUTTON_DEBOUNCE_MS)) {
-    lastButtonState = buttonState;
-    lastButtonChange = now;
-    
-    // Latching switch: LOW = ON, HIGH = OFF (typical)
-    if (buttonState == LOW) {
-      // Switch turned ON
-      if (!apModeActive) {
-        startAPMode();
-      }
-    } else {
-      // Switch turned OFF
-      if (apModeActive) {
-        stopAPMode();
-      }
-    }
-  }
-}
-
-// ================== SETUP ==================
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
-
-  Serial.println("\n=== WebMOD Async File Manager (Latching Switch AP Control) ===");
-
-  // Configure latching switch pin
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  Serial.println("Latching switch on GPIO " + String(BUTTON_PIN) + " ready (ON position = enable WebUI, OFF position = disable)");
-
-  //  LittleFS
-  if (!LittleFS.begin(true)) {
-    Serial.println("LittleFS Mount Failed!");
-    return;
-  }
-
-  Serial.println("LittleFS initialized. Web routes will be set up when AP mode is activated.");
-
-  // Disable WiFi to avoid conflicts with Ethernet
-  WiFi.mode(WIFI_OFF);
-  delay(100);
-  Serial.println("WiFi disabled (will enable when AP button is activated)");
-
-  // ================== RTU INIT ==================
-  delay(500);
-  Serial.println("\n=== Initializing RTU (Modbus) ===");
-  
-  pinMode(LED_PIN,  OUTPUT);
-  pinMode(PUMP_PIN, OUTPUT);
-  pinMode(LED_PIN2, OUTPUT);
-  digitalWrite(LED_PIN,  LOW);
-  digitalWrite(PUMP_PIN, LOW);
-
-  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
-  mbRTU.begin(&Serial2);
-  mbRTU.slave(1);
-
-  mbRTU.addCoil(0, coilLed);
-  mbRTU.addCoil(1, coilPump);
-  mbRTU.addCoil(2, coilLed2);
-  mbRTU.addHreg(0, setTemp);
-  mbRTU.addHreg(1, setSpeed);
-  mbRTU.addIreg(0, actualTemp);
-  mbRTU.addIreg(1, voltage);
-  mbRTU.addIreg(2, counterVal);
-
-  Serial.println("RTU Initialized!");
-
-  // ================== ETHERNET + TCP INIT ==================
-  Serial.println("\n=== Initializing Ethernet (DHCP) ===");
-  
-  SPI.begin(18, 19, 23, 5);
-  Ethernet.init(5);
-
-  Serial.println("Requesting DHCP...");
-  if (Ethernet.begin(mac) == 0) {
-    Serial.println("[DHCP] Failed — check router/cable");
-    delay(2000);
-  }
-
-  delay(1000);
-
-  Serial.print("IP:      "); Serial.println(Ethernet.localIP());
-  Serial.print("Gateway: "); Serial.println(Ethernet.gatewayIP());
-  Serial.print("Subnet:  "); Serial.println(Ethernet.subnetMask());
-  Serial.print("Link:    "); Serial.println(Ethernet.linkStatus());
-
-  ethServer.begin();
-
-  if (!modbusTCPServer.begin()) {
-    Serial.println("[TCP] Server init failed!");
-  }
-
-  modbusTCPServer.configureCoils(0, 3);
-  modbusTCPServer.configureHoldingRegisters(0, 2);
-  modbusTCPServer.configureInputRegisters(0, 3);
-
-  Serial.println("TCP + RTU Bridge Ready!");
-  Serial.println("\n=== System Initialize Complete ===\n");
+  Serial.println("\nServer started!");
+  Serial.println("Connect to WiFi: ESP32_FileServer");
+  Serial.println("Open browser: http://192.168.4.1");
 }
 
 // ================== LOOP ==================
 void loop() {
-  // RTU task must run every iteration — no delays before this
-  mbRTU.task();
-
-  unsigned long now = millis();
-  if (now - lastLoopTime < LOOP_INTERVAL_MS) return;
-  lastLoopTime = now;
-
-  // Check button press for AP mode toggle
-  checkButtonPress();
-
-  // Network & DHCP tasks (only if AP mode active)
-  if (apModeActive) {
-    maintainDHCP();
-    processNetwork();
-  }
-
-  // Sync data between TCP, RTU, and hardware
-  syncFromRTU();
-  syncFromTCP();
-
-  // Apply hardware changes
-  applyHardware();
-  
-  // Update simulated metrics
-  updateSimulatedMetrics();
-
-  // Sync back to both TCP and RTU
-  syncToRTU();
-  syncToTCP();
+  // Keep the loop empty or add your custom logic here
 }
 
 // ================== HTML ==================

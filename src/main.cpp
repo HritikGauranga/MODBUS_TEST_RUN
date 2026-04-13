@@ -10,7 +10,7 @@ byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xEE };
 IPAddress ip(192, 168, 8, 177);
 
 // Server on Modbus port
-EthernetServer ethServer(502);
+EthernetServer newserver(502);
 ModbusTCPServer modbusTCPServer;
 
 // LED pin
@@ -47,7 +47,7 @@ void setup() {
   Serial.println(Ethernet.localIP());
 
   // Start server
-  ethServer.begin();
+  newserver.begin();
 
   if (!modbusTCPServer.begin()) {
     Serial.println("Modbus failed!");
@@ -62,7 +62,7 @@ void setup() {
 }
 
 void loop() {
-  EthernetClient client = ethServer.available();
+  EthernetClient client = newserver.available();
 
   if (client) {
     Serial.println(" Client detected");
